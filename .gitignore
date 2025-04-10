@@ -3,3 +3,6 @@
 .RData
 .Ruserdata
 *.Rproj
+
+# These are avny's personal notes.
+avny-notes.docx
