@@ -22,13 +22,15 @@ service_neighborhoods <- neighborhoods |>
   st_transform(32736)
 
 grid <- st_make_grid(service_neighborhoods,
-                     cellsize = as_units(500, "m")) |>
+                     cellsize = as_units(500, "m"),
+                     square = FALSE) |>
   st_as_sf() 
 
 grid <- grid |>
   rename(geometry = x) |>
   mutate(id = seq(1, nrow(grid), by=1)) |>
-  select(id, geometry)
+  select(id, geometry) |>
+  st_filter(service_neighborhoods)
 
 st_write(grid, 
          here("kampala-geography",
