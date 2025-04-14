@@ -1,24 +1,80 @@
 library(sf)
 library(tidyverse)
 library(stars)
+library(here)
 
-pop_data_2020_url <- 
-  "https://data.worldpop.org/GIS/Population/Global_2000_2020/2020/UGA/uga_ppp_2020.tif"
+pop_files <- paste0("uga_ppp_",
+                    2000:2020,
+                    ".tif")
+
+pop_data_urls <- paste0("https://data.worldpop.org/GIS/Population/Global_2000_2020/",
+                        2000:2020,
+                        "/UGA/",
+                        pop_files)
+
+pop_vars <- paste0("pop_", 2000:2020)
 
 ### Note that this next part takes about 25 minutes to run.
-pop_data_2020 <- stars::read_stars(pop_data_2020_url) |>
-  st_as_sf(as_points = TRUE, merge = FALSE) |>
-  st_filter(service_neighborhoods) |>
-  st_transform(32736)
+pop_data <- stars::read_stars(pop_data_urls[1]) |>
+  st_as_sf(as_points = TRUE, merge = FALSE) 
 
-grid_pop <- pop_data_2020 |>
+grid <- here("kampala-geography",
+             "grid_routes.geojson") |>
+  st_read() |>
+  st_transform(st_crs(pop_data))
+
+neighborhoods <- here("kampala-geography",
+                      "neighborhood-routes.geojson") |>
+  st_read() |>
+  st_transform(st_crs(pop_data))
+
+colnames(pop_data) <- c("population", "geometry")
+
+pop_grid_nhood <- pop_data |>
   st_join(grid) |>
   st_drop_geometry() |>
-  group_by(id) |>
-  summarise(pop_2020 = sum(uga_ppp_2020.tif))
+  filter(!is.na(id))
 
-neighborhoods_pop <- pop_data_2020 |>
-  st_join(service_neighborhoods) |>
-  st_drop_geometry() |>
-  group_by(shapeName) |>
-  summarize(pop_2020 = sum(uga_ppp_2020.tif))
+grid_pop <- pop_grid_nhood |>
+  group_by(id) |>
+  summarise(pop_2000 = sum(population))
+
+nhood_pop <- pop_grid_nhood |>
+  group_by(neighborhood) |>
+  summarise(pop_2000 = sum(population))
+
+for(i in 2:length(pop_data_urls)) {
+  pop_data <- stars::read_stars(pop_data_urls[i]) |>
+    st_as_sf(as_points = TRUE, merge = FALSE) 
+  
+  colnames(pop_data) <- c("population", "geometry")
+  
+  pop_grid_nhood <- pop_data |>
+    st_join(grid) |>
+    st_drop_geometry() |>
+    filter(!is.na(id))
+  
+  next_grid_pop <- pop_grid_nhood |>
+    group_by(id) |>
+    summarise(pop = sum(population))
+  
+  colnames(next_grid_pop) <- c("id", paste0("pop_", i+1999))
+  
+  next_nhood_pop <- pop_grid_nhood |>
+    group_by(neighborhood) |>
+    summarise(pop = sum(population))
+  
+  colnames(next_nhood_pop) <- c("neighborhood", paste0("pop_", i+1999))
+  
+  grid_pop <- full_join(grid_pop, next_grid_pop)
+  nhood_pop <- full_join(nhood_pop, next_nhood_pop)
+  
+  write_csv(grid_pop,
+            here("population-data",
+                 "grid-pop.csv"))
+  
+  write_csv(nhood_pop_pop,
+            here("population-data",
+                 "nhood-pop.csv"))
+}
+

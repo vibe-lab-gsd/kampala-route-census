@@ -15,28 +15,36 @@ service_area <- st_union(routes) |>
 # https://data.humdata.org/dataset/geoboundaries-admin-boundaries-for-uganda
 neighborhoods <- here("kampala-geography",
                       "geoBoundaries-UGA-ADM4.geojson") |>
-  st_read()
-
-service_neighborhoods <- neighborhoods |>
+  st_read() |>
   st_filter(service_area) |>
-  st_transform(32736)
+  st_transform(32736) |>
+  mutate(name = shapeName) |>
+  select(name)
 
-grid <- st_make_grid(service_neighborhoods,
-                     cellsize = as_units(500, "m"),
+grid <- st_make_grid(neighborhoods,
+                     cellsize = as_units(1, "km"),
                      square = FALSE) |>
   st_as_sf() 
 
 grid <- grid |>
-  rename(geometry = x) |>
-  mutate(id = seq(1, nrow(grid), by=1)) |>
-  select(id, geometry) |>
-  st_filter(service_neighborhoods)
+  mutate(id = seq(1, nrow(grid), by=1)) 
+
+grid_nhoods <- st_centroid(grid) |>
+  st_filter(neighborhoods) |>
+  st_join(neighborhoods) |>
+  st_drop_geometry()
+
+grid <- grid |>
+  right_join(grid_nhoods) |>
+  rename(geometry = x,
+         neighborhood = name) |>
+  select(id, neighborhood, geometry) 
 
 st_write(grid, 
          here("kampala-geography",
               "study-area-grid-cells.geojson"))
 
-st_write(service_neighborhoods, 
+st_write(neighborhoods, 
          here("kampala-geography",
               "study-area-neighborhoods.geojson"))
 
