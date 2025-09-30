@@ -101,15 +101,28 @@ stops_geocoded <- stops_geocoded_q %>%
 
 
 # Calculate success rate 
-n_searchedfor <- nrow(stops_test)
+n_searchedfor <- nrow(stops_test) 
 n_found <- nrow(stops_geocoded_q[!is.na(stops_geocoded_q$place_id), ])
+
 print(paste0("Matches by place name: ", n_found, " out of ", n_searchedfor, " stops located."))
+
+# Summary of findings 
+stops_geocoded_q %>% 
+  distinct(r2, place_id) %>%
+  summarize(
+    n.unique.stops  = n(), 
+    found.place = sum(!is.na(place_id)), 
+    no.place.found = sum(is.na(place_id))
+  )
+
 
 # List of unmatched stops: 
 stops_geocoded_q %>%
   filter(is.na(place_id)) %>% 
-  distinct(r2, route_id, stage_id, branch_id, taxi_park) %>% 
-  view
+  distinct(r2, route_id, stage_id, branch_id, taxi_park)
+stops_geocoded_q %>% filter(is.na(place_id)) %>% distinct(r2) %>% nrow()
+
+
 
 
 # View results: 
@@ -149,6 +162,10 @@ nearest_lines <- st_nearest_points(stops_routes_geos, stops_geocoded_2, pairwise
 snapped_points <- st_cast(nearest_lines, "POINT", group_or_split=F) %>% 
   st_as_sf() %>% 
   mutate(r2 = stops_routes_geos$r2,
+         route_id = stops_routes_geos$route_id,
+         stage_id = stops_routes_geos$stage_id,
+         branch_id = stops_routes_geos$branch_id,
+         taxi_park = stops_routes_geos$taxi_park,
          dist_to_route = st_length(nearest_lines) %>% round() %>% as.numeric()) %>% 
   filter(dist_to_route<=thresh)
 
@@ -156,32 +173,27 @@ nearest_lines_df <- st_length(nearest_lines) %>% round() %>%
   as.numeric() %>% 
   as.data.frame() %>% 
   rename("dist_to_route" = ".") %>% 
+  mutate(r2 = stops_routes_geos$r2,
+         dist_to_route = st_length(nearest_lines) %>% round() %>% as.numeric()) %>%
   st_set_geometry(nearest_lines) %>% 
   filter(dist_to_route<=thresh)
 
 print(paste0("When filtering to points within ", thresh, " meters of a route: ", 
-             nrow(nearest_lines_df), " out of ", n_searchedfor, " stops located."))
+             nrow(distinct(nearest_lines_df, r2)), " out of ", nrow(distinct(stops_geocoded_q, r2)), " stops located."))
 
 
 # view 
 resmap <- tm_basemap("OpenStreetMap") + 
   tm_shape(stops_geocoded_2 %>% select(unique_id, r2, name, route_id, stage_id, stage_name, branch_id, taxi_park), 
-           name = "Stops (OSM-returned coordinates)", hover='r2') + tm_dots(size=.7) + 
+           name = "Stops (OSM-returned coordinates)", hover='r2') + tm_dots(fill = 'blue', size=.7) + 
   tm_shape(stops_routes_geos %>% select(unique_id, route_id, stage_id, stage_name, branch_id, taxi_park), 
-           name = "Routes", hover='route_id') + tm_lines(col='black', lwd = 1) + 
+           name = "Routes", is.main=FALSE) + tm_lines(col='black', lwd = 5, col_alpha=.5) + 
   tm_shape(nearest_lines_df) + tm_lines(col='red') +
-  tm_shape(snapped_points, is.main = TRUE, name = "Stops - snapped locations") + tm_dots(size=.7, fill='red') +
+  tm_shape(snapped_points, name = "Stops - snapped locations") + tm_dots(size=.7, fill='red') +
   tm_title("Stop locations: Snapped to routes")
 
 tmap_mode("view")
 resmap
-
-nearest_lines[st_length(nearest_lines)==max(st_length(nearest_lines)),] %>% 
-  tm_shape() + tm_lines(col = 'purple') + 
-  routes_map + stops_map
-
-stops_routes_geos[800,]
-stops_geocoded_2[800,]
 
 tmap_save(tm = resmap, 
           filename = file.path(git_path, "code", "geocode_stops_map.html"))
