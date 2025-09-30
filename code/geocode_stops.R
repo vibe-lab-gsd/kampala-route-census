@@ -60,16 +60,31 @@ st_crs(stops) <- 3857   # Web Mercator  - this looks right when mapped
 
 
 
+# NEW: Stops dataset = 1 row per stop
+  stops_raw %>% 
+    distinct(r2, r3, year, route_id, stage_id, branch_id, taxi_park) %>% 
+    mutate(year = as.numeric(year), 
+           r3 = as.numeric(r3)) %>% 
+    filter(year==r3 | (r3<2000 & year==2000))  # Keep earliest obs 
+
+# list of unique stop names: (w/cleaning)
+stop_names <- stops_raw %>% 
+  mutate(
+    r2 = tolower(r2) %>% 
+      str_replace_all(c("center"="centre"))
+  ) %>% 
+  distinct(r2)
+
 
 # Geocode Stops  ----------------------------------------------------------------------
 
-# Try with a sample of just a few stops
-stops_test <- stops[1:100,] %>% 
+# Try all, or filter `stops` to try on a subset of just a few stops
+stops_test <- stops %>% 
   st_transform(4326)  # transform to WGS84 coordinates 
 
 # Bounding box (all routes)
-bbox <- st_bbox(stops_test)
-  
+bbox <- st_bbox(st_transform(stops, 4326))
+
 # Query 
 stops_geocoded_q <- stops_test %>% 
   geocode(address = r2, method = "osm", lat = latitude, long = longitude,
@@ -81,20 +96,24 @@ stops_geocoded_q <- stops_test %>%
 # Set geometry to the coordinates fetched, keeping only those for which query returned coords
 stops_geocoded <- stops_geocoded_q %>% 
   filter(!is.na(latitude) & !is.na(longitude)) %>% 
-  st_as_sf(coords = c("longitude", "latitude")) %>% 
+  st_as_sf(coords = c("longitude", "latitude")) %>%
   unique()
 
 
 # Calculate success rate 
-n_searchedfor <- distinct(stops_test, r2) %>% nrow
-n_found <- nrow(stops_geocoded)
+n_searchedfor <- nrow(stops_test)
+n_found <- nrow(stops_geocoded_q[!is.na(stops_geocoded_q$place_id), ])
+print(paste0("Matches by place name: ", n_found, " out of ", n_searchedfor, " stops located."))
 
-print(paste0(n_found, " out of ", n_searchedfor, " distinct stops located."))
+# List of unmatched stops: 
+stops_geocoded_q %>%
+  filter(is.na(place_id)) %>% 
+  distinct(r2, route_id, stage_id, branch_id, taxi_park) %>% 
+  view
 
 
 # View results: 
-routes_map <- tm_shape(stops, is_main = FALSE,
-                       name = "Routes") + 
+routes_map <- tm_shape(stops, is_main = FALSE, name = "Routes") + 
   tm_lines(lwd=0.5, col_alpha=0.2) 
 
 stops_map <- tm_shape(stops_geocoded %>% select(r2, name, route_id),
@@ -113,7 +132,7 @@ tm_basemap("OpenStreetMap") +
 stops_routes_geos <- stops %>% 
   distinct(id, r2, geometry, .keep_all=TRUE) %>% 
   filter(unique_id %in% stops_geocoded$unique_id) %>% 
-  arrange(unique_id) %>% 
+  arrange(unique_id) %>%  
   unique()
 
 # Transform stop coordinates to match 
@@ -121,19 +140,52 @@ stops_geocoded_2 <- stops_geocoded %>% st_set_crs(4326) %>%
   st_transform(crs = st_crs(stops)) %>% 
   arrange(unique_id)
 
-# Find nearest points along the routes to the stops 
-nearest_lines <- st_nearest_points(stops_routes_geos[1:50,], stops_geocoded_2[1:50,], pairwise=T)
+stopifnot(stops_routes_geos$unique_id==stops_geocoded_2$unique_id)
+
+# Find nearest points along the routes to the stops & # Filter by distance threshold
+thresh <- 500 # meters 
+
+nearest_lines <- st_nearest_points(stops_routes_geos, stops_geocoded_2, pairwise=T)
 snapped_points <- st_cast(nearest_lines, "POINT", group_or_split=F) %>% 
   st_as_sf() %>% 
-  mutate(r2 = stops_routes_geos[1:50,]$r2)
+  mutate(r2 = stops_routes_geos$r2,
+         dist_to_route = st_length(nearest_lines) %>% round() %>% as.numeric()) %>% 
+  filter(dist_to_route<=thresh)
+
+nearest_lines_df <- st_length(nearest_lines) %>% round() %>% 
+  as.numeric() %>% 
+  as.data.frame() %>% 
+  rename("dist_to_route" = ".") %>% 
+  st_set_geometry(nearest_lines) %>% 
+  filter(dist_to_route<=thresh)
+
+print(paste0("When filtering to points within ", thresh, " meters of a route: ", 
+             nrow(nearest_lines_df), " out of ", n_searchedfor, " stops located."))
+
 
 # view 
-tm_basemap("OpenStreetMap") + 
-tm_shape(stops_geocoded_2 %>% select(r2, route_id, stage_id, stage_name, branch_id, taxi_park), 
-         name = "Stops (OSM-returned coordinates)", hover='r2') + tm_dots(size=.7) + 
-tm_shape(stops_routes_geos %>% select(year, stage_id, stage_name), 
-         name = "Routes", hover = 'id') + tm_lines() + 
-tm_shape(nearest_lines) + tm_lines(col='red') +
-tm_shape(snapped_points, name = "Stops - snapped locations") + tm_dots(size=.7, fill='red') +
-tm_title("Stop locations: Snapped to routes")
+resmap <- tm_basemap("OpenStreetMap") + 
+  tm_shape(stops_geocoded_2 %>% select(unique_id, r2, name, route_id, stage_id, stage_name, branch_id, taxi_park), 
+           name = "Stops (OSM-returned coordinates)", hover='r2') + tm_dots(size=.7) + 
+  tm_shape(stops_routes_geos %>% select(unique_id, route_id, stage_id, stage_name, branch_id, taxi_park), 
+           name = "Routes", hover='route_id') + tm_lines(col='black', lwd = 1) + 
+  tm_shape(nearest_lines_df) + tm_lines(col='red') +
+  tm_shape(snapped_points, is.main = TRUE, name = "Stops - snapped locations") + tm_dots(size=.7, fill='red') +
+  tm_title("Stop locations: Snapped to routes")
+
+tmap_mode("view")
+resmap
+
+nearest_lines[st_length(nearest_lines)==max(st_length(nearest_lines)),] %>% 
+  tm_shape() + tm_lines(col = 'purple') + 
+  routes_map + stops_map
+
+stops_routes_geos[800,]
+stops_geocoded_2[800,]
+
+tmap_save(tm = resmap, 
+          filename = file.path(git_path, "code", "geocode_stops_map.html"))
+
+
+
 
