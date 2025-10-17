@@ -1,0 +1,408 @@
+---
+title: "Untitled"
+author: "Gray Collins"
+date: "2025-10-17"
+output: html_document
+params: 
+  git_path: "C:/Users/Gray Collins/Documents/GitHub/kampala-route-census"
+  drive_path: "G:/Shared drives/ugandatransit/uganda_transit_archives"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(haven)
+library(openxlsx)
+library(tidyverse)
+library(lubridate)
+library(survival)
+library(osmdata)
+library(vroom)
+library(sf)
+library(tmap)
+library(fixest)
+library(ggfortify)
+library(viridis)
+library(spatialreg)
+library(dynlm)
+library(forecast)
+library(stargazer)
+```
+
+```{r read json data}
+# Gridcell-level routes and population: 
+grid_routes <- file.path(params$git_path, "kampala-geography", "grid_routes.geojson") %>% st_read()
+grid_pop <- file.path(params$git_path, "population-data", "grid-pop.csv") %>% read_csv()
+
+grid <- left_join(grid_routes, grid_pop, by='id') %>% 
+  rename_with(~ gsub("F", "nroutes_", .x, fixed=T), 
+              starts_with("F"))
+
+
+# Neighborhood-level routes and population: 
+nhood_routes <- file.path(params$git_path, "kampala-geography", "neighborhood-routes.geojson") %>% st_read() %>% 
+  # NOTE: there are multiple rows in nhood_routes for Central Division - correct: 
+  mutate(name = case_when(
+    name=="Central Division" & F2024==502 ~ "Central Division", 
+    name=="Central Division" & F2024==25 ~ "Central Division (Mukono)", 
+    name=="Central Division" & F2024==2 ~ "Central Division (Buikwe)", 
+    name=="Central Division" & F2024==0 ~ "Central Division (Jinja)",
+    .default = name
+    )) 
+
+nhood_pop <- file.path(params$git_path, "population-data", "nhood-pop.csv") %>% read_csv()
+
+nhood <- tidylog::left_join(nhood_routes, nhood_pop, by=c("name"="neighborhood")) %>%
+  # Create neighborhood identifier
+  mutate(id = name) %>% 
+  rename_with(~ gsub("F", "nroutes_", .x, fixed=T), 
+              starts_with("F"))
+
+# Routes shapefile: 
+routes <- file.path(params$git_path, "route-data", "routes_final", "routes.shp") %>% st_read()
+
+```
+
+```{r reshape grid and neighborhood level combined data}
+# Grid-level
+grid_long <- grid %>%
+  ungroup() %>% 
+  pivot_longer(
+    cols = matches("(.+)20([0-9])([0-9])"),
+    names_to = c(".value", "year"),
+    names_sep = "_"
+  ) %>% 
+  arrange(id, year) %>% 
+  group_by(id) %>% 
+  mutate(
+    popchange_yoy = pop - lag(pop),
+    popchange_pct_yoy = 100*popchange_yoy/lag(pop),   # % change in population
+    routechange_yoy = nroutes - lag(nroutes),
+    routes_any = ifelse(nroutes>0, 1,0)
+  )
+
+# Nhood-level
+nhood_long <- nhood %>% 
+  ungroup() %>% 
+  pivot_longer(
+    cols = matches("(.+)20([0-9])([0-9])"),
+    names_to = c(".value", "year"),
+    names_sep = "_"
+  ) %>% 
+  distinct(id, year, .keep_all=TRUE) %>% 
+  arrange(id, year) %>% 
+  group_by(id) %>% 
+  mutate(
+    popchange_yoy = pop - lag(pop),
+    popchange_pct_yoy = 100*popchange_yoy/lag(pop),   # % change in population 
+    routechange_yoy = nroutes - lag(nroutes),
+    routes_any = ifelse(nroutes>0, 1,0)
+  )
+
+```
+
+# Maps
+
+## Taxi routes & population, by neighborhood 
+```{r route map}
+tmap_mode("view")
+
+tm_shape(routes %>% filter(F2019==1), is.main=FALSE) + 
+    tm_lines(col='red') + 
+  tm_shape(nhood_long %>% filter(year==2019) %>% select(id, pop) %>%
+             mutate(id = id %>% str_replace_all("Town Council", "T.C.") %>% str_replace_all("Division", "Div."))) +
+  tm_shape(grid_long %>% filter(year==2019)) + 
+    tm_polygons(hover='id', fill='pop', fill_alpha=0.5) + 
+    tm_text(text = 'id', size=1) + 
+  tm_title("Taxi routes (2019) and neighborhoods") 
+```
+
+
+## Population
+
+```{r population maps}
+map_pop <- function(data, border_alpha, yr){
+  data <- data %>% 
+    select(id, starts_with("pop"))
+  
+  # tm_basemap("OpenStreetMaps") + 
+  popmap <- tm_shape(data) +
+   tm_polygons(fill = paste0("pop_", yr),
+               col_alpha = border_alpha, 
+               hover = 'id',
+               fill.scale = tm_scale_continuous(
+                 values = viridis::viridis(7),
+                 ticks = c(100, 1000, 2000, 5000, 10000, 15000)),
+               fill_alpha = .7,
+               fill.legend = tm_legend(
+                  title = paste0("Population - ", yr),
+                  component.autoscale = FALSE
+               )) + 
+   tm_title(paste0("Population of Kampala - ", yr))
+}
+
+map_pop(grid, border_alpha=0, yr=2000)
+map_pop(grid, border_alpha=0, yr=2005)
+map_pop(grid, border_alpha=0, yr=2010)
+map_pop(grid, border_alpha=0, yr=2015)
+map_pop(grid, border_alpha=0, yr=2019)
+
+```
+
+## Percent change in population 
+
+```{r pct change population maps}
+map_pop_pctchange <- function(data, border_alpha, yr){
+  data <- data %>% 
+    filter(year==yr)
+  
+  scalemin <- min(data$popchange_pct_yoy, na.rm=T)
+  scalemax <- max(data$popchange_pct_yoy, na.rm=T)
+  
+  tm_basemap("OpenStreetMaps") + 
+    tm_shape(data) +
+   tm_polygons(fill = "popchange_pct_yoy",
+               col_alpha = border_alpha, 
+               hover = 'id',
+               fill.scale = tm_scale_continuous(
+                 values = RColorBrewer::brewer.pal(9, 'RdBu'),
+                 outliers.trunc = TRUE,
+                 ticks = c(-25, -10, -5, -1, 0, 1, 5, 10, 25)),
+               fill_alpha = .7,
+               component.autoscale = FALSE,
+               fill.legend = tm_legend(
+                  title = paste0("Pct change in population - ", yr)
+               )) + 
+   tm_title(paste0("Population of Kampala - ", yr)) + 
+    tmap_options(component.autoscale = FALSE)
+}
+
+map_pop_pctchange(grid_long, border_alpha=0, yr=2005)
+map_pop_pctchange(grid_long, border_alpha=0, yr=2010)
+map_pop_pctchange(grid_long, border_alpha=0, yr=2015)
+map_pop_pctchange(grid_long, border_alpha=0, yr=2020) 
+
+```
+
+# Plots
+
+## Route growth versus population growth 
+
+It seems like there is a logarithmically shaped relationship between population and route growth in neighborhoods with smaller populations. But for neighborhoods with larger populations, this relationship seems to take a different shape. 
+
+```{r plots route x population}
+# N routes X Log population 
+ggplot(nhood_long, 
+       aes(x=pop, y=nroutes, group=id)) + 
+  # geom_point() + 
+  geom_line() +
+  labs(title = "Number of routes & population - all neighborhoods")
+
+
+# N routes & population 
+ggplot(nhood_long, 
+       aes(x=popchange_yoy, y=routechange_yoy, group=id,
+           size=pop)) + 
+  geom_point(color='blue', alpha=0.3) + 
+  labs(title = "Year-over-year route growth & absolute population growth - all neighborhoods")
+```
+
+
+Note: Population growth rates by neighborhood are mostly constant over time, but oddly bunched at the 2.5% and 6% thresholds. Is this an artifact of the data somehow? 
+
+```{r plots route x percent change in population}
+ggplot(nhood_long, 
+       aes(x=popchange_pct_yoy, y=routechange_yoy, group=id)) + 
+  geom_point() + 
+  labs(title = "Year-over-year route growth & percent change in population - all neighborhoods")
+
+
+ggplot(nhood_long, aes(x=popchange_pct_yoy)) + 
+  geom_histogram() +
+  scale_x_continuous(breaks = seq(-2,15,by=1)) +
+  labs(title = "% change in population - histogram")
+```
+
+Below compares neighborhood X year combinations with 0 taxi routes to neighborhood X year combinations with any routes. Interestingly 
+
+```{r}
+ggplot(nhood_long, aes(x=year, y=popchange_pct_yoy, group=id, color=id)) + 
+  geom_line(show.legend=F) + 
+  labs(title = "% change in population by neighborhood")
+ 
+ggplot(nhood_long, 
+       aes(x=popchange_pct_yoy)) + geom_density() + 
+  labs(title = "% change in population by neighborhood") +
+  facet_wrap(~factor(routes_any, levels=c(0,1), labels=c("No taxi routes", "1+ taxi routes")))
+
+ggplot(nhood_long, 
+       aes(x=pop)) + geom_histogram() + 
+  labs(title = "Total population by neighborhood") +
+  facet_wrap(~factor(routes_any, levels=c(0,1), labels=c("No taxi routes", "1+ taxi routes")))
+
+```
+
+
+```{r scatter plots route and population by neighborhood, fig.width=8, fig.height=15}
+ggplot(data = nhood_long,
+       aes(x=year, y=nroutes, group=id)) + 
+  geom_line() + 
+  facet_wrap(~str_wrap(id, 30), nrow=12) + 
+  scale_x_discrete(breaks = seq(2000,2025, by=5)) +
+  labs(title = "Number of routes, by neighborhood")
+
+ggplot(data = nhood_long,
+       aes(x=year, y=log(pop), group=id)) + 
+  geom_line() + 
+  facet_wrap(~str_wrap(id, 30), nrow=12) + 
+  scale_x_discrete(breaks = seq(2000,2025, by=5)) +
+  labs(title = "Log population, by neighborhood")
+```
+
+
+
+# Analysis 
+
+Begin with the year 2024. 
+- Look among gridcells which are similar in population, in the ?th percentile of gridcells (find a reasonable cut point judging by population data). 
+- Identify which gridcells “earned” service (based on population) and those which didn’t (those with low population, but got a route anyway).
+
+- Service indicator: Binary, whether a gridcell has routes going through it or not
+- Diff in means (population) between these at different time intervals in future
+    - Time horizon: test several
+- Diff: between corridors which got a route and those which didnt
+
+
+## Find population cutpoint 
+
+First create an indicator for whether a route was added 
+
+```{r}
+
+# Base year for analysis 
+yr <- 2019
+
+
+# Year in which service began 
+start_yr <- grid_long %>% 
+  st_drop_geometry() %>% 
+  as.data.frame() %>% 
+  group_by(id) %>% 
+  arrange(year) %>% 
+  filter(nroutes>0) %>%
+  summarise(start_year = min(year))
+
+# Value labels for the service_status indicator 
+servicelabs <- c(paste0("[0] No routes in ", yr),
+                 paste0("[1] Newly served in ", yr),
+                 paste0("[2] Served ", yr, ", unchanged from ", yr-1),
+                 paste0("[3] Served ", yr, ", increase from ", yr-1),
+                 paste0("[4] Served ", yr, ", decrease from ", yr-1))
+
+# Service indicator 
+grid_long_changes <- grid_long %>%
+  left_join(start_yr, by='id') %>% 
+  group_by(id) %>% 
+  # Indicate unserved and newly served areas  
+  mutate(
+    unserved = ifelse(nroutes==0, 1, 0), 
+    newly_served = ifelse(year==start_year, 1, 0),
+    
+    service_status = case_when(
+      year==yr & nroutes==0 ~ 0,
+      year==yr & nroutes > 0 & lag(nroutes)==0 ~ 1,
+      year==yr & nroutes==lag(nroutes) & nroutes>0 ~ 2,
+      year==yr & nroutes > 0 & lag(nroutes) > 0 & nroutes>lag(nroutes) ~ 3,
+      year==yr & nroutes < lag(nroutes) ~ 4) %>% as.factor(),
+    service_status_l = case_when(
+      year==yr & nroutes==0 ~ paste0("[0] No routes in ", yr),
+      year==yr & nroutes > 0 & lag(nroutes)==0 ~ paste0("[1] Newly served in ", yr),
+      year==yr & nroutes==lag(nroutes) & nroutes>0 ~ paste0("[2] Served ", yr, ", unchanged from ", yr-1),
+      year==yr & nroutes > 0 & lag(nroutes) > 0 & nroutes>lag(nroutes) ~ paste0("[3] Served ", yr, ", increase from ", yr-1),
+      year==yr & nroutes < lag(nroutes) ~ paste0("[4] Served ", yr, ", decrease from ", yr-1)) %>%
+      as.factor()
+  ) %>% 
+  fill(service_status, .direction='downup') %>% 
+  fill(service_status_l, .direction='downup')
+ 
+
+# Summary: 
+grid_long_changes %>% 
+  filter(year==yr) %>% 
+  group_by(service_status) %>% 
+  summarise(n=n())
+```
+
+Density plot: Population in served vs. non-served gridcells. The 2019 data suggests there is a cutoff around 2250 people. 
+
+```{r}
+
+# Population: All gridcells 
+ggplot(grid_long_changes %>% filter(year==yr)) + 
+  geom_density(aes(x=pop)) + 
+  labs(title = paste0("Population (", yr, "): All gridcells"))
+
+
+# Population: By service status 
+ggplot(grid_long_changes %>% filter(year==yr)) + 
+  geom_density(aes(x=pop)) + 
+  labs(title = paste0("Population (", yr, "): By route service status"),
+       caption = "note - flexible axes") + 
+  facet_wrap(~service_status, scales='free')
+
+```
+
+## Identify 'treatment' areas
+
+"Treatment" gridcells = Cells which are below the population cutoff but received route service 
+"Control" gridcells = Cells which are below the population cutoff and did not receive route service 
+
+For 2019, the population cutoff is ~ 2250 
+
+```{r test for 2019}
+yr.test <- 2019 
+pop.cut <- 2250 
+
+
+grid_long_changes %>% 
+  filter(service_status==paste0("[0] No routes in ", yr) | 
+           service_status == paste0("[1] Newly served in ", yr)) %>% 
+  mutate(
+    treat = ifelse(pop<pop.cut & service_status = )
+  )
+
+```
+
+
+
+
+## Test differences in population growth 
+
+Test differences in population growth for gridcells where service was added vs gridcells with constant service 
+
+For year = 2019: Test diff in 2020 population 
+
+```{r, fig.height=10, fig.widgth=6}
+# Filter to only areas where routes were added in focus yr
+grid_long_test <- grid_long_changes %>% 
+  filter(service_status==paste0("[0] No routes in ", yr) | 
+           service_status == paste0("[1] Newly served in ", yr))
+
+
+# Test
+
+
+
+# Plot 
+ggplot(grid_long_test %>% filter(!is.na(pop))) + 
+  geom_density(aes(x=pop)) + 
+  facet_grid(cols=vars(service_status), rows=vars(year)) + 
+  labs(title = paste0("Population by year: by service status in ", yr))
+
+# Test association 
+ols_res <- lm(popchange_pct_yoy ~ service_status + popchange_pct_yoy + lag(popchange_pct_yoy),
+   data = grid_long_test) 
+
+stargazer(ols_res, type='text')
+
+```
+
