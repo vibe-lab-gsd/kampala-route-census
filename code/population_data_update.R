@@ -3,16 +3,17 @@ library(tidyverse)
 library(stars)
 library(here)
 
-pop_files <- paste0("uga_ppp_",
-                    2000:2024,
-                    ".tif")
+pop_files <- paste0("uga_pop_",
+                    2015:2024,
+                    "_CN_100m_R2025A_v1.tif")
 
-pop_data_urls <- paste0("https://data.worldpop.org/GIS/Population/Global_2000_2020/",
-                        2000:2024,
+pop_data_urls <- paste0("https://data.worldpop.org/GIS/Population/Global_2015_2030/R2025A/",
+                        2015:2024,
                         "/UGA/",
+                        "v1/100m/constrained/",
                         pop_files)
 
-pop_vars <- paste0("pop_", 2000:2024)
+pop_vars <- paste0("pop_", 2015:2024)
 
 ### Note that this next part takes about 25 minutes to run.
 pop_data <- stars::read_stars(pop_data_urls[1]) |>
@@ -37,11 +38,11 @@ pop_grid_nhood <- pop_data |>
 
 grid_pop <- pop_grid_nhood |>
   group_by(id) |>
-  summarise(pop_2000 = sum(population))
+  summarise(pop_2015 = sum(population))
 
 nhood_pop <- pop_grid_nhood |>
   group_by(neighborhood) |>
-  summarise(pop_2000 = sum(population))
+  summarise(pop_2015 = sum(population))
 
 for(i in 2:length(pop_data_urls)) {
   pop_data <- stars::read_stars(pop_data_urls[i]) |>
@@ -58,23 +59,23 @@ for(i in 2:length(pop_data_urls)) {
     group_by(id) |>
     summarise(pop = sum(population))
   
-  colnames(next_grid_pop) <- c("id", paste0("pop_", i+1999))
+  colnames(next_grid_pop) <- c("id", paste0("pop_", i+2014))
   
   next_nhood_pop <- pop_grid_nhood |>
     group_by(neighborhood) |>
     summarise(pop = sum(population))
   
-  colnames(next_nhood_pop) <- c("neighborhood", paste0("pop_", i+1999))
+  colnames(next_nhood_pop) <- c("neighborhood", paste0("pop_", i+2014))
   
   grid_pop <- full_join(grid_pop, next_grid_pop)
   nhood_pop <- full_join(nhood_pop, next_nhood_pop)
   
   write_csv(grid_pop,
             here("population-data",
-                 "grid-pop.csv"))
+                 "grid-pop-2015_2024.csv"))
   
   write_csv(nhood_pop_pop,
             here("population-data",
-                 "nhood-pop.csv"))
+                 "nhood-pop-2015_2024.csv"))
 }
 
