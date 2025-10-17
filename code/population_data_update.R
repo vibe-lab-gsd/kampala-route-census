@@ -74,7 +74,7 @@ for(i in 2:length(pop_data_urls)) {
             here("population-data",
                  "grid-pop-2015_2024.csv"))
   
-  write_csv(nhood_pop_pop,
+  write_csv(nhood_pop,
             here("population-data",
                  "nhood-pop-2015_2024.csv"))
 }
