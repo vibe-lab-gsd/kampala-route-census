@@ -1,41 +1,47 @@
 ---
-title: "Untitled"
+title: "Census analysis"
 author: "Gray Collins"
 date: "2025-10-17"
-output: html_document
+output: 
+  html_document: 
+    self_contained: true
 params: 
   git_path: "C:/Users/Gray Collins/Documents/GitHub/kampala-route-census"
   drive_path: "G:/Shared drives/ugandatransit/uganda_transit_archives"
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = FALSE)
 library(haven)
 library(openxlsx)
 library(tidyverse)
 library(lubridate)
-library(survival)
-library(osmdata)
-library(vroom)
 library(sf)
 library(tmap)
-library(fixest)
-library(ggfortify)
-library(viridis)
-library(spatialreg)
-library(dynlm)
-library(forecast)
-library(stargazer)
+library(rmapshaper)
+# library(survival)
+# library(osmdata)
+# library(vroom)
+# library(fixest)
+# library(ggfortify)
+# library(viridis)
+# library(spatialreg)
+# library(dynlm)
+# library(forecast)
+library(stargazer) 
 ```
 
 ```{r read json data}
 # Gridcell-level routes and population: 
 grid_routes <- file.path(params$git_path, "kampala-geography", "grid_routes.geojson") %>% st_read()
 grid_pop <- file.path(params$git_path, "population-data", "grid-pop.csv") %>% read_csv()
+# grid_pop_2 <- file.path(params$git_path, "population-data", "grid-pop-2015_2024.csv") %>% read_csv()
 
 grid <- left_join(grid_routes, grid_pop, by='id') %>% 
   rename_with(~ gsub("F", "nroutes_", .x, fixed=T), 
               starts_with("F"))
+ 
+
 
 
 # Neighborhood-level routes and population: 
@@ -50,6 +56,11 @@ nhood_routes <- file.path(params$git_path, "kampala-geography", "neighborhood-ro
     )) 
 
 nhood_pop <- file.path(params$git_path, "population-data", "nhood-pop.csv") %>% read_csv()
+# nhood_pop_2 <- file.path(params$git_path, "population-data", "nhood-pop-2015_2024.csv") %>% read_csv() %>% 
+#   select(neighborhood, pop_2021, pop_2022, pop_2023, pop_2024)
+# 
+# # Join population data 
+# nhood_pop <- tidylog::full_join(nhood_pop_1, nhood_pop_2, by='neighborhood')
 
 nhood <- tidylog::left_join(nhood_routes, nhood_pop, by=c("name"="neighborhood")) %>%
   # Create neighborhood identifier
@@ -104,27 +115,27 @@ nhood_long <- nhood %>%
 
 ## Taxi routes & population, by neighborhood 
 ```{r route map}
-tmap_mode("view")
+tmap_mode("plot")
 
 tm_shape(routes %>% filter(F2019==1), is.main=FALSE) + 
     tm_lines(col='red') + 
   tm_shape(nhood_long %>% filter(year==2019) %>% select(id, pop) %>%
              mutate(id = id %>% str_replace_all("Town Council", "T.C.") %>% str_replace_all("Division", "Div."))) +
-  tm_shape(grid_long %>% filter(year==2019)) + 
-    tm_polygons(hover='id', fill='pop', fill_alpha=0.5) + 
-    tm_text(text = 'id', size=1) + 
+  tm_text(text = 'id', size=1) +
+  tm_polygons(fill='pop', fill_alpha=0.5) + 
+  # tm_shape(grid_long %>% filter(year==2019)) + 
+  #   tm_polygons(hover='id', fill='pop', fill_alpha=0.5) + 
   tm_title("Taxi routes (2019) and neighborhoods") 
 ```
 
 
 ## Population
 
-```{r population maps}
+```{r population maps, resuts='asis'}
 map_pop <- function(data, border_alpha, yr){
   data <- data %>% 
     select(id, starts_with("pop"))
   
-  # tm_basemap("OpenStreetMaps") + 
   popmap <- tm_shape(data) +
    tm_polygons(fill = paste0("pop_", yr),
                col_alpha = border_alpha, 
@@ -138,13 +149,15 @@ map_pop <- function(data, border_alpha, yr){
                   component.autoscale = FALSE
                )) + 
    tm_title(paste0("Population of Kampala - ", yr))
+  
+  return(popmap)
 }
 
-map_pop(grid, border_alpha=0, yr=2000)
-map_pop(grid, border_alpha=0, yr=2005)
-map_pop(grid, border_alpha=0, yr=2010)
-map_pop(grid, border_alpha=0, yr=2015)
-map_pop(grid, border_alpha=0, yr=2019)
+# map_pop(grid, border_alpha=0, yr=2000)
+# map_pop(grid, border_alpha=0, yr=2005)
+# map_pop(grid, border_alpha=0, yr=2010)
+# map_pop(grid, border_alpha=0, yr=2015)
+map_pop(grid, border_alpha=0, yr=2020)
 
 ```
 
@@ -158,8 +171,7 @@ map_pop_pctchange <- function(data, border_alpha, yr){
   scalemin <- min(data$popchange_pct_yoy, na.rm=T)
   scalemax <- max(data$popchange_pct_yoy, na.rm=T)
   
-  tm_basemap("OpenStreetMaps") + 
-    tm_shape(data) +
+  popmap_pctchange <-  tm_shape(data) +
    tm_polygons(fill = "popchange_pct_yoy",
                col_alpha = border_alpha, 
                hover = 'id',
@@ -172,14 +184,16 @@ map_pop_pctchange <- function(data, border_alpha, yr){
                fill.legend = tm_legend(
                   title = paste0("Pct change in population - ", yr)
                )) + 
-   tm_title(paste0("Population of Kampala - ", yr)) + 
+   tm_title(paste0("% change in population - ", yr)) + 
     tmap_options(component.autoscale = FALSE)
+  
+  return(popmap_pctchange)
 }
 
-map_pop_pctchange(grid_long, border_alpha=0, yr=2005)
-map_pop_pctchange(grid_long, border_alpha=0, yr=2010)
-map_pop_pctchange(grid_long, border_alpha=0, yr=2015)
-map_pop_pctchange(grid_long, border_alpha=0, yr=2020) 
+# map_pop_pctchange(grid_long, border_alpha=0, yr=2005)
+# map_pop_pctchange(grid_long, border_alpha=0, yr=2010)
+# map_pop_pctchange(grid_long, border_alpha=0, yr=2015)
+map_pop_pctchange(grid_long, border_alpha=0, yr=2020)  
 
 ```
 
@@ -206,8 +220,11 @@ ggplot(nhood_long,
   labs(title = "Year-over-year route growth & absolute population growth - all neighborhoods")
 ```
 
+## Population change (neighborhood-level, year-over-year)
 
-Note: Population growth rates by neighborhood are mostly constant over time, but oddly bunched at the 2.5% and 6% thresholds. Is this an artifact of the data somehow? 
+Note: Population growth rates by neighborhood are mostly constant over the years, but oddly bunched at the 2.5% and 6% thresholds. The line graph is messy but demonstrates that neighborhoods typically experience a constant growth rate over the years. 
+
+What might explain the bunching at 2.5% and 6%?  
 
 ```{r plots route x percent change in population}
 ggplot(nhood_long, 
@@ -220,15 +237,17 @@ ggplot(nhood_long, aes(x=popchange_pct_yoy)) +
   geom_histogram() +
   scale_x_continuous(breaks = seq(-2,15,by=1)) +
   labs(title = "% change in population - histogram")
-```
 
-Below compares neighborhood X year combinations with 0 taxi routes to neighborhood X year combinations with any routes. Interestingly 
-
-```{r}
 ggplot(nhood_long, aes(x=year, y=popchange_pct_yoy, group=id, color=id)) + 
   geom_line(show.legend=F) + 
   labs(title = "% change in population by neighborhood")
  
+```
+
+Below compares neighborhood X year combinations with 0 taxi routes to neighborhood X year combinations with any routes. 
+
+```{r}
+
 ggplot(nhood_long, 
        aes(x=popchange_pct_yoy)) + geom_density() + 
   labs(title = "% change in population by neighborhood") +
@@ -241,14 +260,15 @@ ggplot(nhood_long,
 
 ```
 
+Log-population by neighborhood:
 
 ```{r scatter plots route and population by neighborhood, fig.width=8, fig.height=15}
-ggplot(data = nhood_long,
-       aes(x=year, y=nroutes, group=id)) + 
-  geom_line() + 
-  facet_wrap(~str_wrap(id, 30), nrow=12) + 
-  scale_x_discrete(breaks = seq(2000,2025, by=5)) +
-  labs(title = "Number of routes, by neighborhood")
+# ggplot(data = nhood_long,
+#        aes(x=year, y=nroutes, group=id)) + 
+#   geom_line() + 
+#   facet_wrap(~str_wrap(id, 30), nrow=12) + 
+#   scale_x_discrete(breaks = seq(2000,2025, by=5)) +
+#   labs(title = "Number of routes, by neighborhood")
 
 ggplot(data = nhood_long,
        aes(x=year, y=log(pop), group=id)) + 
@@ -256,13 +276,19 @@ ggplot(data = nhood_long,
   facet_wrap(~str_wrap(id, 30), nrow=12) + 
   scale_x_discrete(breaks = seq(2000,2025, by=5)) +
   labs(title = "Log population, by neighborhood")
+
+# ggplot(data = nhood_long,
+#        aes(x=year, y=pop, group=id)) + 
+#   geom_line() + 
+#   facet_wrap(~str_wrap(id, 30), nrow=12) + 
+#   scale_x_discrete(breaks = seq(2000,2025, by=5)) +
+#   labs(title = "Total population, by neighborhood")
 ```
 
 
 
 # Analysis 
 
-Begin with the year 2024. 
 - Look among gridcells which are similar in population, in the ?th percentile of gridcells (find a reasonable cut point judging by population data). 
 - Identify which gridcells “earned” service (based on population) and those which didn’t (those with low population, but got a route anyway).
 
@@ -272,15 +298,18 @@ Begin with the year 2024.
 - Diff: between corridors which got a route and those which didnt
 
 
+## Define reference year
+IMPORTANT: The code below calculates differences in population and route coverage relative to this reference year; change it before rerunning the below analysis  
+```{r define base year for analysis}
+yr <- 2019
+```
+
+
 ## Find population cutpoint 
 
 First create an indicator for whether a route was added 
 
 ```{r}
-
-# Base year for analysis 
-yr <- 2019
-
 
 # Year in which service began 
 start_yr <- grid_long %>% 
@@ -298,7 +327,6 @@ servicelabs <- c(paste0("[0] No routes in ", yr),
                  paste0("[3] Served ", yr, ", increase from ", yr-1),
                  paste0("[4] Served ", yr, ", decrease from ", yr-1))
 
-# Service indicator 
 grid_long_changes <- grid_long %>%
   left_join(start_yr, by='id') %>% 
   group_by(id) %>% 
@@ -328,81 +356,173 @@ grid_long_changes <- grid_long %>%
 # Summary: 
 grid_long_changes %>% 
   filter(year==yr) %>% 
-  group_by(service_status) %>% 
+  group_by(service_status_l) %>% 
   summarise(n=n())
 ```
 
-Density plot: Population in served vs. non-served gridcells. The 2019 data suggests there is a cutoff around 2250 people. 
+Density plot: Population in served vs. non-served gridcells (reference year: 2019). The second plot (showing population in only those gridcells with any changes at all) doesn't seem to suggest a clear population threshold at which a gridcell "earns" route service. Among those [1] newly served in 2019, there are too few observations to tell a cutoff; if there was any cutoff, perhaps it'd be pop=2500, but it's counter-intuitive that most gridcells are below that threshold and only n=2 are above it. Perhaps among routes with [3] increased service relative to 2018, the distribution seems almost bimodal and pop=7500 could be a cutoff for increasing service. But this doesn't explain the emergence of routes in previously unserved gridcells. 
+
+These plots + the table above show there are very few gridcells with any service changes whatsoever.
 
 ```{r}
 
-# Population: All gridcells 
-ggplot(grid_long_changes %>% filter(year==yr)) + 
-  geom_density(aes(x=pop)) + 
-  labs(title = paste0("Population (", yr, "): All gridcells"))
-
-
-# Population: By service status 
+# Population: By service status
 ggplot(grid_long_changes %>% filter(year==yr)) + 
   geom_density(aes(x=pop)) + 
   labs(title = paste0("Population (", yr, "): By route service status"),
        caption = "note - flexible axes") + 
-  facet_wrap(~service_status, scales='free')
+  facet_wrap(~service_status_l)
+
+
+# Population: Closer look at routes with any changes
+ggplot(grid_long_changes %>% filter(year==yr & service_status!=0)) + 
+  geom_histogram(aes(x=pop), bins=50) + 
+  labs(title = paste0("Population (", yr, "): By route service status"),
+       caption = "note - flexible axes") + 
+  facet_wrap(~service_status_l)
 
 ```
 
-## Identify 'treatment' areas
+## Visualize new service corridors 
 
-"Treatment" gridcells = Cells which are below the population cutoff but received route service 
-"Control" gridcells = Cells which are below the population cutoff and did not receive route service 
+Since there are so few gridcells where new service was added, can we try to classify them in another way--namely, is it visually apparent which transit corridor they are part of? 
 
-For 2019, the population cutoff is ~ 2250 
+The map below shows the gridcells which did not have any route coverage in the previous year, but do have coverage during the test year. The routes which were inactive last year but active this year are also shown in red. 
 
-```{r test for 2019}
-yr.test <- 2019 
-pop.cut <- 2250 
+For the year 2019, there are a few clearly visible corridor additions: 
+- In the West, Wakiso neighborhood, two routes divert to Kigoma, and another continues past Bukasa along Sentema Road. 
+- To the Southwest, in Kyengera Town council, a new route from Kisenyi-Gwanda branches south from Kampala-Masaka Road and continues just across the Entebbe border via Busembe and Nanziga
+- In the South, a new route to Entebbe operates along the Kampala-Entebbe Expressway (which was opened in 2018), adding new service to several previously unserved gridcells in Kyengera and Kajjansi. 
+- There are other, minor additions to routes that typically don't result in a previously unserved gridcell getting service. 
+
+```{r}
+newservicemapdata <- grid_long_changes %>% 
+  filter(year==yr & service_status==1) %>%
+  select(id, neighborhood, nroutes, pop, popchange_yoy, popchange_pct_yoy, service_status_l)
+
+# Filter routes to only those which were active this year  
+routes_yr <- routes %>% 
+  rename(active_now = paste0("F", paste(yr)),
+         active_last_year = paste0("F", paste(yr-1))) %>%
+  filter(active_now==1) %>% 
+  select(route_id, stage_code, Origin, Stage, ObjectID_1, layer, active_now, active_last_year) %>% 
+  mutate(hover = paste0("Route ", route_id, ", Stage ", stage_code, ", Origin ", Origin),
+         color = case_when(   # note - treat values of NA in the routes dataset like 0
+           active_now==1 & (active_last_year==0 | is.na(active_last_year)) ~ "blue", 
+           .default = "black"))
+ 
+
+# Map: 
+tm_basemap("OpenStreetMap") +
+tm_title(paste0("New routes and newly served gridcells: ", yr)) +
+  # tm_shape(nhood) + tm_polygons(fill_alpha=0) + 
+  tm_shape(newservicemapdata) + tm_polygons(fill = 'blue', fill_alpha=0.5) + 
+  tm_shape(routes_yr) + tm_lines(hover = 'hover', col = 'color', col_alpha=0.5, lwd=2)
+```
 
 
-grid_long_changes %>% 
-  filter(service_status==paste0("[0] No routes in ", yr) | 
-           service_status == paste0("[1] Newly served in ", yr)) %>% 
-  mutate(
-    treat = ifelse(pop<pop.cut & service_status = )
-  )
+The below map shows gridcells where the number of routes increased (green), decreased (red), or did not change (grey) based on the prior year. Previously unserved gridcells with route service this year are still shown in blue. 
+
+```{r, fig.width=8, fig.height=8}
+# Map ALL gridcells by service status: 
+allservicemapdata <- grid_long_changes %>% 
+  filter(year==yr) %>% 
+  mutate(fill = case_match(service_status,
+                           "0" ~ NA,
+                           "1" ~ "blue",
+                           "2" ~ "white", 
+                           "3" ~ "green",
+                           "4" ~ "red"))
+
+tm_basemap("OpenStreetMap") +
+tm_title(paste0("New routes and all service changes in gridcells: ", yr)) + 
+  tm_shape(allservicemapdata) + tm_polygons(fill = 'fill', fill_alpha=0.5, col=NA, col_alpha=0, lwd=0) + 
+  tm_shape(routes_yr) + tm_lines(hover = 'hover', col = 'color', col_alpha=0.5, lwd=1)
 
 ```
 
 
+## Compare for other years 
 
+```{r function to get grid_long_changes for other years, echo=F}
 
-## Test differences in population growth 
+get_long_changes <- function(refyear) {
+  # Value labels for the service_status indicator 
+  servicelabs <- c(paste0("[0] No routes in ", refyear),
+                 paste0("[1] Newly served in ", refyear),
+                 paste0("[2] Served ", refyear, ", unchanged from ", refyear-1),
+                 paste0("[3] Served ", refyear, ", increase from ", refyear-1),
+                 paste0("[4] Served ", refyear, ", decrease from ", refyear-1))
+  
+  df <- grid_long %>%
+    left_join(start_yr, by='id') %>% 
+    group_by(id) %>% 
+    mutate(
+      unserved = ifelse(nroutes==0, 1, 0), 
+      newly_served = ifelse(year==refyear, 1, 0),
+      service_status = case_when(
+        year==refyear & nroutes==0 ~ 0,
+        year==refyear & nroutes > 0 & lag(nroutes)==0 ~ 1,
+        year==refyear & nroutes==lag(nroutes) & nroutes>0 ~ 2,
+        year==refyear & nroutes > 0 & lag(nroutes) > 0 & nroutes>lag(nroutes) ~ 3,
+        year==refyear & nroutes < lag(nroutes) ~ 4) %>% as.factor(),
+      service_status_l = factor(service_status,
+                                levels = c(0,1,2,3,4), 
+                                labels = servicelabs)) %>% 
+    fill(service_status, .direction='downup') %>% 
+    fill(service_status_l, .direction='downup') 
 
-Test differences in population growth for gridcells where service was added vs gridcells with constant service 
+    return(df)
+}
 
-For year = 2019: Test diff in 2020 population 
-
-```{r, fig.height=10, fig.widgth=6}
-# Filter to only areas where routes were added in focus yr
-grid_long_test <- grid_long_changes %>% 
-  filter(service_status==paste0("[0] No routes in ", yr) | 
-           service_status == paste0("[1] Newly served in ", yr))
-
-
-# Test
-
-
-
-# Plot 
-ggplot(grid_long_test %>% filter(!is.na(pop))) + 
-  geom_density(aes(x=pop)) + 
-  facet_grid(cols=vars(service_status), rows=vars(year)) + 
-  labs(title = paste0("Population by year: by service status in ", yr))
-
-# Test association 
-ols_res <- lm(popchange_pct_yoy ~ service_status + popchange_pct_yoy + lag(popchange_pct_yoy),
-   data = grid_long_test) 
-
-stargazer(ols_res, type='text')
+map_long_changes <- function(refyear) {
+  # Get data and add fill aesthetics: 
+  df <- get_long_changes(refyear)
+  
+  servicemapdata <- df %>% 
+    filter(year==refyear) %>% 
+    mutate(fill = case_match(
+      service_status,
+      "0" ~ NA, "1" ~ "blue", "2" ~ "white", "3" ~ "green", "4" ~ "red")) 
+  
+  # Routes active this year: 
+  routesyr <- routes %>% 
+  rename(active_now = paste0("F", paste(refyear)),
+         active_last_year = paste0("F", paste(refyear-1))) %>%
+  filter(active_now==1) %>% 
+  select(route_id, stage_code, Origin, Stage, ObjectID_1, layer, active_now, active_last_year) %>% 
+  mutate(hover = paste0("Route ", route_id, ", Stage ", stage_code, ", Origin ", Origin),
+         color = case_when(   # note - treat values of NA in the routes dataset like 0
+           active_now==1 & (active_last_year==0 | is.na(active_last_year)) ~ "blue", 
+           .default = "black"))
+ 
+  # Map: 
+  tm_basemap("OpenStreetMap") +
+  tm_title(paste0("New routes and all service changes in gridcells: ", refyear)) +
+    tm_shape(servicemapdata) + tm_polygons(fill = 'fill', fill_alpha=0.5, col=NA, col_alpha=0, lwd=0) + 
+    tm_shape(routesyr) + tm_lines(hover = 'hover', col = 'color', col_alpha=0.5, lwd=2)
+}
 
 ```
+
+Maps for other years: 
+Blue = New service, Green = Increased service, Red = Decreased service, White = Unchanged service, (relative to previous year) 
+- 2018: No newly served gridcells 
+- 2017: Several new corridors expand service into the N and NW areas of the city, with gridcells around Nansana and north of Tula receiving new routes 
+- 2016: Some changes in connections but only one newly served gridcell near Naaya Estate in the northeast; most new routes are small branches or redirections
+- 2015: Several extensions provide routes in newly served parts of Mukono, NE of Gayaza, Lugo, and north of Bukasa
+
+```{r, fig.width=8, fig.height=8}
+map_long_changes(2014)
+map_long_changes(2015)
+map_long_changes(2016)
+map_long_changes(2017)
+map_long_changes(2019)
+```
+
+ 
+
+
+
+
 
